@@ -1,0 +1,185 @@
+// ====== Backend: server.js ======
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const csv = require('csv-parser');
+const fs = require('fs');
+
+dotenv.config();
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  email: String,
+  password: String,
+});
+const User = mongoose.model('User', userSchema);
+
+// Agent Schema
+const agentSchema = new mongoose.Schema({
+  name: String,
+  email: String,
+  mobile: String,
+  password: String,
+});
+const Agent = mongoose.model('Agent', agentSchema);
+
+// List Schema
+const listSchema = new mongoose.Schema({
+  firstName: String,
+  phone: String,
+  notes: String,
+  agentId: mongoose.Schema.Types.ObjectId,
+});
+const List = mongoose.model('List', listSchema);
+
+// JWT Authentication Middleware
+const authenticateToken = (req, res, next) => {
+  const token = req.headers['authorization'];
+  if (!token) return res.sendStatus(401);
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// User Login
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email, password });
+  if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+  const token = jwt.sign({ email: user.email }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+// Add Agent
+app.post('/api/agents', authenticateToken, async (req, res) => {
+  const { name, email, mobile, password } = req.body;
+  const agent = new Agent({ name, email, mobile, password });
+  await agent.save();
+  res.status(201).json(agent);
+});
+
+// CSV Upload and Task Distribution
+const upload = multer({ dest: 'uploads/' });
+app.post('/api/upload', authenticateToken, upload.single('file'), async (req, res) => {
+  const agents = await Agent.find();
+  const results = [];
+  fs.createReadStream(req.file.path)
+    .pipe(csv())
+    .on('data', (data) => results.push(data))
+    .on('end', async () => {
+      const chunkSize = Math.ceil(results.length / agents.length);
+      for (let i = 0; i < agents.length; i++) {
+        const chunk = results.slice(i * chunkSize, (i + 1) * chunkSize);
+        const lists = chunk.map((item) => ({
+          firstName: item.FirstName,
+          phone: item.Phone,
+          notes: item.Notes,
+          agentId: agents[i]._id,
+        }));
+        await List.insertMany(lists);
+      }
+      res.json({ message: 'File processed and tasks distributed' });
+    });
+});
+
+// Get Distributed Lists
+app.get('/api/lists', authenticateToken, async (req, res) => {
+  const lists = await List.find().populate('agentId');
+  res.json(lists);
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// ====== Frontend: App.js ======
+import React, { useState } from 'react';
+import axios from 'axios';
+
+const App = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [token, setToken] = useState('');
+  const [file, setFile] = useState(null);
+
+  const handleLogin = async () => {
+    const res = await axios.post('/api/login', { email, password });
+    setToken(res.data.token);
+  };
+
+  const handleFileUpload = async () => {
+    const formData = new FormData();
+    formData.append('file', file);
+    await axios.post('/api/upload', formData, { headers: { Authorization: token } });
+  };
+
+  return (
+    <div>
+      <h2>Login</h2>
+      <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <button onClick={handleLogin}>Login</button>
+
+      <h2>Upload CSV</h2>
+      <input type="file" onChange={(e) => setFile(e.target.files[0])} />
+      <button onClick={handleFileUpload}>Upload</button>
+    </div>
+  );
+};
+
+export default App;
+
+// ====== .env ======
+MONGO_URI=your_mongodb_uri
+JWT_SECRET=your_jwt_secret
+PORT=5000
+
+// ====== README.md ======
+# MERN Stack Task Distribution App
+
+## Setup Instructions
+
+1. Clone the repository.
+2. Install backend dependencies:
+```bash
+cd backend
+npm install
+```
+3. Install frontend dependencies:
+```bash
+cd frontend
+npm install
+```
+4. Create a `.env` file in the backend directory with the following:
+```
+MONGO_URI=your_mongodb_uri
+JWT_SECRET=your_jwt_secret
+PORT=5000
+```
+5. Run the backend:
+```bash
+npm start
+```
+6. Run the frontend:
+```bash
+npm start
+```
+
+## Features
+- Admin login with JWT authentication.
+- Agent creation and management.
+- CSV upload and task distribution among agents.
+- Lists retrieval for each agent.
+
+## Video Demo
+[Provide your Google Drive link here]
